@@ -31,7 +31,7 @@ jobs:
           $gyp = "$env:RUNNER_TEMP/build-tools/node_modules/node-gyp/bin/node-gyp.js"
           foreach ($dir in @('.', 'node_modules/cap', 'node_modules/raw-socket')) {
             Push-Location $dir
-            node $gyp rebuild --target=8.17.0 --arch=x64 --msvs_version=2022
+            node $gyp rebuild --target=8.17.0 --arch=x64 --msvs_version=2022 --python="$env:pythonLocation/python.exe" -- -Dopenssl_fips=
             $result = $LASTEXITCODE
             Pop-Location
             if ($result) { throw "Native compilation failed: $dir" }
