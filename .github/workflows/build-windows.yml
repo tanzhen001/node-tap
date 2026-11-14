@@ -51,6 +51,11 @@ jobs:
           if (!$line) { throw 'Runtime checksum missing' }
           $expected = ($line.Trim() -split '\s+')[0]
           if ((Get-FileHash node.exe -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Runtime checksum mismatch' }
+          & .\node.exe -e "const n=require('./index.js'); if(typeof n.N_GetAllDevicesInfo !== 'function') throw Error('Native addon did not load'); console.log('Native addon load passed')"
+          if ($LASTEXITCODE) { throw 'Native addon smoke check failed' }
+          $help = & .\node.exe output/app.js --help 2>&1
+          if (($help -join "`n") -notmatch 'Usage:') { throw 'CLI help check failed' }
+          $global:LASTEXITCODE = 0
           New-Item -ItemType Directory dist/node-tap -Force | Out-Null
           Copy-Item node.exe,index.js,package.json,package-lock.json,LICENSE,README.md dist/node-tap
           Copy-Item output,build,node_modules,driver dist/node-tap -Recurse
