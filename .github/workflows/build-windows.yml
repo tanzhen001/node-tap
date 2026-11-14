@@ -1,0 +1,75 @@
+name: Build Windows from source
+on:
+  push:
+    paths:
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install source dependencies without lifecycle scripts
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { throw 'Dependency installation failed' }
+          npm install --prefix "$env:RUNNER_TEMP/build-tools" node-gyp@10.3.1 --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { throw 'Build tool installation failed' }
+      - name: Compile native modules for Node 8
+        shell: pwsh
+        run: |
+          $gyp = "$env:RUNNER_TEMP/build-tools/node_modules/node-gyp/bin/node-gyp.js"
+          foreach ($dir in @('.', 'node_modules/cap', 'node_modules/raw-socket')) {
+            Push-Location $dir
+            node $gyp rebuild --target=8.17.0 --arch=x64 --msvs_version=2022
+            $result = $LASTEXITCODE
+            Pop-Location
+            if ($result) { throw "Native compilation failed: $dir" }
+          }
+      - name: Compile TypeScript
+        shell: pwsh
+        run: |
+          node node_modules/typescript/bin/tsc --project tsconfig.json
+          if ($LASTEXITCODE) { throw 'TypeScript compilation failed' }
+      - name: Assemble portable Windows package
+        shell: pwsh
+        run: |
+          $base = 'https://nodejs.org/dist/v8.17.0'
+          Invoke-WebRequest "$base/win-x64/node.exe" -OutFile node.exe
+          $sums = (Invoke-WebRequest "$base/SHASUMS256.txt").Content
+          $line = ($sums -split "`n" | Where-Object { $_ -match 'win-x64/node.exe$' })
+          if (!$line) { throw 'Runtime checksum missing' }
+          $expected = ($line.Trim() -split '\s+')[0]
+          if ((Get-FileHash node.exe -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Runtime checksum mismatch' }
+          New-Item -ItemType Directory dist/node-tap -Force | Out-Null
+          Copy-Item node.exe,index.js,package.json,package-lock.json,LICENSE,README.md dist/node-tap
+          Copy-Item output,build,node_modules,driver dist/node-tap -Recurse
+          '@echo off', 'cd /d "%~dp0"', 'node.exe output\app.js %*' | Set-Content dist/node-tap/start.cmd -Encoding ascii
+          @(
+            'Built from repository source by GitHub Actions.'
+            'Command-line portable package, not a graphical installer.'
+            'Run start.cmd with Shadowsocks host, port, password and method arguments.'
+            'Administrator privileges and a compatible TAP driver are required when running.'
+            'No driver is installed during this build.'
+            'This is the original TCP/UDP design, not a UDP-over-TCP modification.'
+            'Node 8 is obsolete. This build does not certify security or networking compatibility.'
+          ) | Set-Content dist/node-tap/BUILD-NOTES.txt
+          git rev-parse HEAD | Set-Content dist/node-tap/SOURCE-COMMIT.txt
+          Compress-Archive dist/node-tap -DestinationPath dist/node-tap-windows-x64.zip
+          Get-FileHash dist/node-tap-windows-x64.zip -Algorithm SHA256 | Format-List | Out-File dist/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-tap-windows-x64
+          path: |
+            dist/node-tap-windows-x64.zip
+            dist/SHA256.txt
